@@ -149,6 +149,8 @@ async function processFile(filePath) {
       // Description comes only for cases that changed since the previous batch,
       // so it is set when present and otherwise left as stored.
       if (row.Description !== undefined) doc.description = row.Description === null ? "" : String(row.Description);
+      // The latest comment comes the same way. OTSM leaves some characters as HTML codes in it.
+      if (row["Latest Comment"] !== undefined) doc.latestComment = decodeEntities(col("Latest Comment"));
       cases.unshift(doc);
     }
     logger.silly("Created case objects: " + cases);
@@ -423,6 +425,18 @@ function otsmLabel(field, value) {
     logger.warn(`No OTSM label for ${field} value "${value}"; storing it unchanged. Add it to OTSM_LABELS.`);
   }
   return value;
+}
+
+/* "&#x3a;" -> ":", "&amp;" -> "&"... */
+const HTML_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+function decodeEntities(text) {
+  return text.replace(/&(#x[0-9a-f]+|#[0-9]+|[a-z]+);/gi, (m, e) => {
+    if (e[0] === '#') {
+      const code = e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      try { return String.fromCodePoint(code); } catch (err) { return m; }
+    }
+    return HTML_ENTITIES[e.toLowerCase()] !== undefined ? HTML_ENTITIES[e.toLowerCase()] : m;
+  });
 }
 
 function toDate(epochMs) {

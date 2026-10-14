@@ -9,7 +9,8 @@ report downloads.
 - A batch file is deleted only after its cases were written to Mongo; if the write fails
   the file stays and is read again when the parser restarts.
 - Cases are updated with `$set`, so a field a batch doesn't carry (Description comes only
-  for changed cases) keeps its stored value.
+  for changed cases) keeps its stored value. The same goes for `latestComment` (HTML codes
+  such as `&#x3a;` decoded).
 - Status, priority, case type, creation source and phase are stored as the labels OTSM
   shows, with the internal value in `<field>Id`. Names are stored as "First Last".
 - If no batch arrives for 10 minutes it sends an email alert and exits.
