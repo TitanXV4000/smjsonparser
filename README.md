@@ -30,5 +30,5 @@ report downloads.
 docker build -t tsanford/smjsonparser .
 docker run -d --name smjsonparser --restart unless-stopped -e TZ=America/Denver \
   --add-host host.docker.internal:host-gateway -v smapidata:/smexports-api \
-  --env-file smreportparser.env tsanford/smjsonparser
+  --env-file smjsonparser.env tsanford/smjsonparser
 ```
