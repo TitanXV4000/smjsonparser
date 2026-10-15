@@ -4,12 +4,27 @@ with the case's full comment list.
     submitter ("First Last"), from/to (Agent, User = customer, System), privacy, purpose,
     the HTML body and a plain-text copy. Comments of the case that are no longer in the list
     (deleted in OTSM) are removed.
-  - The case gets summary fields, so pages don't need to read the comments collection:
-    commentCount, latestCommentTime/By/From/Privacy/Purpose (newest comment of any kind, by
-    CreateTime: the case can change after its newest comment) and latestCustomerComment,
-    latestCustomerCommentTime/By (newest comment with CommentFrom "User").
+  - Each comment also gets isIntegration: the submitter is an OTSM integration account
+    (name with "_intuser_"), e.g. csotsm_quixy_intuser_... (ValueEdge notes, From blank) or
+    csotsm_email_intuser_... ("email too large" notes, From System).
+  - The case gets summary fields, so pages don't need to read the comments collection. Newest
+    by CreateTime (the case can change after its newest comment); texts cut to SUMMARY_CHARS:
+      commentCount
+      latestCommentTime/By/From/Privacy/Purpose     any comment
+      latestCustomerComment/Time/By                 From "User" or "System" (OTSM's "System"
+                                                    comment says a customer email was too large
+                                                    for a comment and was attached instead)
+      latestAgentComment/Time                       From "Agent", written by an engineer: not by an
+                                                    integration account, not an OTSM system comment
+      latestValueEdgeComment/Time                   From blank, by the ValueEdge integration account
+                                                    (csotsm_quixy_intuser_...: "Updated ValueEdge ...")
+  - Comments by the FTS integration account (csotsm_fts_intuser_..., "FTS customer details")
+    aren't stored at all (Trevor: not needed anywhere), so they count nowhere.
 */
 const COMMENTS_COLLECTION = 'comments';
+const SUMMARY_CHARS = 500;
+const SKIP_SUBMITTER = /csotsm_fts_intuser_/i;     // FTS notes: not stored
+const VALUEEDGE_SUBMITTER = /csotsm_quixy_intuser_/i;
 
 function createCommentStore({ MongoClient, config, logger, decodeEntities, lastFirstToFirstLast, toDate, casesCollection }) {
     let indexed = false;
@@ -33,12 +48,19 @@ function createCommentStore({ MongoClient, config, logger, decodeEntities, lastF
             from: c.CommentFrom || '', to: c.CommentTo || '', privacy: c.PrivacyType || '',
             purpose: c.FunctionalPurpose || '', isSystem: !!c.IsSystem, media: c.Media || '',
             interface: c.ActualInterface || '', body: c.Body || '', text: plainText(c.Body),
+            isIntegration: /_intuser_/i.test(c.SubmitterName || ''),
         };
     }
 
+    // First n characters (not UTF-16 halves)
+    const cut = (t, n) => Array.from(t || '').slice(0, n).join('');
+
     function summary(docs) {
         const byTime = docs.slice().sort((a, b) => (b.createTime || 0) - (a.createTime || 0));
-        const latest = byTime[0], customer = byTime.find(d => d.from === 'User');
+        const latest = byTime[0];
+        const customer = byTime.find(d => d.from === 'User' || d.from === 'System');
+        const agent = byTime.find(d => d.from === 'Agent' && !d.isIntegration && !d.isSystem);
+        const valueEdge = byTime.find(d => d.from === '' && VALUEEDGE_SUBMITTER.test(d.submitterName));
         return {
             commentCount: docs.length,
             latestCommentTime: latest ? latest.createTime : null,
@@ -46,10 +68,42 @@ function createCommentStore({ MongoClient, config, logger, decodeEntities, lastF
             latestCommentFrom: latest ? latest.from : '',
             latestCommentPrivacy: latest ? latest.privacy : '',
             latestCommentPurpose: latest ? latest.purpose : '',
-            latestCustomerComment: customer ? customer.text : '',
+            latestCustomerComment: customer ? cut(customer.text, SUMMARY_CHARS) : '',
             latestCustomerCommentTime: customer ? customer.createTime : null,
             latestCustomerCommentBy: customer ? customer.submitterName : '',
+            latestAgentComment: agent ? cut(agent.text, SUMMARY_CHARS) : '',
+            latestAgentCommentTime: agent ? agent.createTime : null,
+            latestValueEdgeComment: valueEdge ? cut(valueEdge.text, SUMMARY_CHARS) : '',
+            latestValueEdgeCommentTime: valueEdge ? valueEdge.createTime : null,
         };
+    }
+
+    // Recomputes isIntegration and the case summaries from the stored comments (after a
+    // change to these rules), without fetching anything from OTSM.
+    async function recomputeAll() {
+        const client = new MongoClient(config.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+        try {
+            await client.connect();
+            const db = client.db(config.MONGO_DB);
+            const comments = db.collection(COMMENTS_COLLECTION), cases = db.collection(casesCollection);
+            const dropped = await comments.deleteMany({ submitterName: SKIP_SUBMITTER });
+            logger.info(`Comments: removed ${dropped.deletedCount} FTS notes.`);
+            await comments.updateMany({}, [{ $set: { isIntegration: { $regexMatch: { input: '$submitterName', regex: '_intuser_', options: 'i' } } } }]);
+            const caseIds = await comments.distinct('caseId');
+            let ops = [], n = 0;
+            for (const caseId of caseIds) {
+                const docs = await comments.find({ caseId }).toArray();
+                ops.push({ updateOne: { filter: { _id: caseId }, update: { $set: summary(docs) } } });
+                if (ops.length === 500) { n += (await cases.bulkWrite(ops, { ordered: false })).nMatched; ops = []; }
+            }
+            if (ops.length) n += (await cases.bulkWrite(ops, { ordered: false })).nMatched;
+            // Cases that had comments but have none left (e.g. only FTS notes): empty summary
+            const emptied = await cases.updateMany({ commentCount: { $gt: 0 }, _id: { $nin: caseIds } }, { $set: summary([]) });
+            logger.info(`Comments: recomputed summaries for ${caseIds.length} cases (${n} matched); ${emptied.modifiedCount} cases left without comments.`);
+            return caseIds.length;
+        } finally {
+            await client.close();
+        }
     }
 
     async function store(entries) {
@@ -63,7 +117,7 @@ function createCommentStore({ MongoClient, config, logger, decodeEntities, lastF
             const commentOps = [], caseOps = [];
             let n = 0;
             for (const entry of entries) {
-                const docs = (entry.comments || []).map(c => toDoc(entry.caseId, c, logTime));
+                const docs = (entry.comments || []).filter(c => !SKIP_SUBMITTER.test(c.SubmitterName || '')).map(c => toDoc(entry.caseId, c, logTime));
                 n += docs.length;
                 commentOps.push({ deleteMany: { filter: { caseId: String(entry.caseId), _id: { $nin: docs.map(d => d._id) } } } });
                 for (const d of docs) { const { _id, ...fields } = d; commentOps.push({ updateOne: { filter: { _id }, update: { $set: fields }, upsert: true } }); }
@@ -77,7 +131,7 @@ function createCommentStore({ MongoClient, config, logger, decodeEntities, lastF
         }
     }
 
-    return { store };
+    return { store, recomputeAll };
 }
 
 module.exports = { createCommentStore };
