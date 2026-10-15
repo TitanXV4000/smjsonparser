@@ -142,9 +142,10 @@ async function processFile(filePath) {
         "reportLocationName"      : col("Report location.Display Name"),   // e.g. "Mexico"
         "url"                     : url,
       };
-      const loc = customerLocation(doc);
+      const loc = customerLocation(doc, col("Requested for company.Headquarters (Country).Display label"),
+                                         col("Requested for company.Headquarters (Country).Display Name"));
       doc.customerRegion  = loc.region;
-      doc.customerCountry = loc.country || fallbackCountry(doc);
+      doc.customerCountry = loc.country;
       // Description comes only for cases that changed since the previous batch,
       // so it is set when present and otherwise left as stored.
       if (row.Description !== undefined) doc.description = row.Description === null ? "" : String(row.Description);
@@ -261,37 +262,42 @@ async function sleep(ms) {
   });
 }
 
-/* Customer region and country, worked out from the requester's location.
-   OTSM locations look like "NA/MEX" (region/country code). OTSM has no Latin
-   America region, so Latin American countries in NA become LATAM.
-   "NA/CAN" is also what OTSM shows when a person's location was never set, so it
-   only counts as Canada when something else points to Canada. Otherwise a Latin
-   American email address means LATAM, then the company's headquarters region is
-   used, then the customer time zone. */
+/* Customer region and country (agreed with Trevor 2026-10-15). The first step that
+   applies sets both, so they always come from the same source:
+     1. Real location: the requester's OTSM location, e.g. "EMEA/DEU" / "Germany"
+     2. NA/CAN with Canada evidence: "NA/CAN" is also what OTSM shows when a person's
+        location was never set, so it only counts when something else points to Canada
+     3. Company headquarters country: the company's "Headquarters (Country)", e.g. "NA/BRA"
+     4. Customer or company time zone: region only
+     5. Latin American email domain: LATAM, plus the country when the domain names one
+     6. Otherwise both blank
+   OTSM has no Latin America region, so a Latin American country code under NA
+   (NA/BRA, NA/MEX) means LATAM, in steps 1 and 3. */
 const LATAM_COUNTRIES = new Set([
   'ARG', 'BLZ', 'BOL', 'BRA', 'CHL', 'COL', 'CRI', 'CUB', 'DOM', 'ECU', 'GTM', 'GUY', 'HND', 'HTI',
   'JAM', 'MEX', 'NIC', 'PAN', 'PER', 'PRI', 'PRY', 'SLV', 'SUR', 'TTO', 'URY', 'VEN',
 ]);
-const REGIONS = new Set(['NA', 'LATAM', 'EMEA', 'APAC']);
 
-function customerLocation(doc) {
+// "NA/BRA" + "Brazil" -> { region: 'LATAM', country: 'Brazil' }; null if not region/code
+function fromLocation(label, name) {
+  const [region, code] = (label || '').trim().split('/');
+  if (!region || !code) return null;
+  return { region: (region === 'NA' && LATAM_COUNTRIES.has(code)) ? 'LATAM' : region, country: cleanCountryName(name) };
+}
+
+function customerLocation(doc, hqLabel, hqName) {
   const loc = doc.reportLocation.trim();
-  const [locRegion, locCode] = loc.split('/');
-  const country = cleanCountryName(doc.reportLocationName);
-
-  if (loc && loc !== 'NA/CAN' && locCode) {
-    const region = (locRegion === 'NA' && LATAM_COUNTRIES.has(locCode)) ? 'LATAM' : locRegion;
-    return { region: region, country: country };
+  if (loc !== 'NA/CAN') {
+    const real = fromLocation(loc, doc.reportLocationName);
+    if (real) return real;
+  } else if (looksCanadian(doc)) {
+    return { region: 'NA', country: cleanCountryName(doc.reportLocationName) || 'Canada' };
   }
-  if (loc === 'NA/CAN' && looksCanadian(doc)) {
-    return { region: 'NA', country: country || 'Canada' };
-  }
-  const latam = latamFromEmail(doc.requestedForEmail);
-  if (latam) return latam;
-  const hq = doc.companyRegion.trim();
-  if (REGIONS.has(hq)) return { region: hq, country: '' };
+  const hq = fromLocation(hqLabel, hqName);
+  if (hq) return (hqLabel.trim() === 'NA/CAN') ? { region: 'NA', country: '' } : hq;   // NA/CAN: unset default
   const tzRegion = timeZoneRegion(doc.customerTimeZone) || timeZoneRegion(doc.companyTimeZone);
-  return { region: tzRegion || 'Unknown', country: '' };
+  if (tzRegion) return { region: tzRegion, country: '' };
+  return latamFromEmail(doc.requestedForEmail) || { region: '', country: '' };
 }
 
 /* Latin America from the requester's email address, for when the location
@@ -347,27 +353,6 @@ function timeZoneRegion(tz) {
   if (/^(Europe|Africa)\//.test(tz) || /^(Egypt|Turkey|Israel|Iran|GB|Eire)$/.test(tz) || EMEA_ASIA_TIME_ZONES.test(tz)) return 'EMEA';
   if (/^(Asia|Australia|Pacific|Indian)\//.test(tz) || /^(Japan|Singapore|Hongkong|PRC|ROC|ROK|NZ)$/.test(tz)) return 'APAC';
   return '';
-}
-
-/* Country when the location gives none, from time zones that point to one country
-   reliably (checked 2026-10-14 against cases whose country is known): first the
-   requester's own time zone, then the customer time zone (usually the company's).
-   Canada/Eastern and America/Montreal are OTSM defaults (about 37% Canada) and other
-   zones are mixed (customer Europe/London: 46% UK), so they're left out. Phone country
-   codes were tried and dropped: they show where a person is from, not where they work
-   (e.g. +91 numbers at North American companies). */
-const REQUESTER_TIME_ZONE_COUNTRIES = {     // 94-100% matched
-  'Europe/Berlin': 'Germany', 'Asia/Kolkata': 'India', 'Asia/Bangkok': 'Thailand',
-  'America/Los_Angeles': 'United States', 'Europe/Helsinki': 'Finland', 'Australia/Sydney': 'Australia',
-  'Japan': 'Japan', 'Europe/London': 'United Kingdom', 'Asia/Dubai': 'United Arab Emirates',
-};
-const CUSTOMER_TIME_ZONE_COUNTRIES = {      // 87-100% matched
-  'Asia/Kolkata': 'India', 'Japan': 'Japan', 'Australia/Sydney': 'Australia',
-  'Asia/Bangkok': 'Thailand', 'Europe/Berlin': 'Germany', 'Europe/Helsinki': 'Finland',
-};
-function fallbackCountry(doc) {
-  return REQUESTER_TIME_ZONE_COUNTRIES[(doc.requestedForTimeZone || '').trim()] ||
-    CUSTOMER_TIME_ZONE_COUNTRIES[(doc.customerTimeZone || '').trim()] || '';
 }
 
 /* OTSM country names are the long ISO forms, e.g. "United States of America (the)",
