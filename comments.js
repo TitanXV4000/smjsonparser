@@ -10,11 +10,13 @@ with the case's full comment list.
   - The case gets summary fields, so pages don't need to read the comments collection. Newest
     by CreateTime (the case can change after its newest comment); texts cut to SUMMARY_CHARS:
       commentCount
-      latestCommentTime/By/From/Privacy/Purpose     any comment
+      latestComment, latestCommentTime/By/From/Privacy/Purpose
+                                                    any comment (latestComment was OTSM's
+                                                    LatestComment_c until 2026-10-15)
       latestCustomerComment/Time/By                 From "User" or "System" (OTSM's "System"
                                                     comment says a customer email was too large
                                                     for a comment and was attached instead)
-      latestAgentComment/Time                       From "Agent", written by an engineer: not by an
+      latestAgentComment/Time/By/Privacy            From "Agent", written by an engineer: not by an
                                                     integration account, not an OTSM system comment
       latestValueEdgeComment/Time                   From blank, by the ValueEdge integration account
                                                     (csotsm_quixy_intuser_...: "Updated ValueEdge ...")
@@ -63,6 +65,7 @@ function createCommentStore({ MongoClient, config, logger, decodeEntities, lastF
         const valueEdge = byTime.find(d => d.from === '' && VALUEEDGE_SUBMITTER.test(d.submitterName));
         return {
             commentCount: docs.length,
+            latestComment: latest ? cut(latest.text, SUMMARY_CHARS) : '',
             latestCommentTime: latest ? latest.createTime : null,
             latestCommentBy: latest ? latest.submitterName : '',
             latestCommentFrom: latest ? latest.from : '',
@@ -73,6 +76,8 @@ function createCommentStore({ MongoClient, config, logger, decodeEntities, lastF
             latestCustomerCommentBy: customer ? customer.submitterName : '',
             latestAgentComment: agent ? cut(agent.text, SUMMARY_CHARS) : '',
             latestAgentCommentTime: agent ? agent.createTime : null,
+            latestAgentCommentBy: agent ? agent.submitterName : '',
+            latestAgentCommentPrivacy: agent ? agent.privacy : '',
             latestValueEdgeComment: valueEdge ? cut(valueEdge.text, SUMMARY_CHARS) : '',
             latestValueEdgeCommentTime: valueEdge ? valueEdge.createTime : null,
         };

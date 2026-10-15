@@ -158,8 +158,6 @@ async function processFile(filePath) {
       // Description comes only for cases that changed since the previous batch,
       // so it is set when present and otherwise left as stored.
       if (row.Description !== undefined) doc.description = row.Description === null ? "" : String(row.Description);
-      // The latest comment comes the same way. OTSM leaves some characters as HTML codes in it.
-      if (row["Latest Comment"] !== undefined) doc.latestComment = decodeEntities(col("Latest Comment"));
       cases.unshift(doc);
     }
     logger.silly("Created case objects: " + cases);
