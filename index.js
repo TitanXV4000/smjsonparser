@@ -133,7 +133,6 @@ async function processFile(filePath) {
         "phaseId"                 : col("Phase Id"),
         "assignmentGroupName"     : col("Assignment group.Name"),
         "customerTimeZone"        : col("Customer Time Zone"),
-        "country"                 : col("Country of Service.Display label"),
         "productDevId"            : col("Product Dev ID"),
         "productModel"            : col("Product Model.Display label"),
         "closureCode"             : col("Closure Code.Display label"),
