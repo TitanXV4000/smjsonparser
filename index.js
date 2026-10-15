@@ -11,6 +11,7 @@ const tsanfordLogger = require('tsanford-logger');
 const nodemailer = require('nodemailer');
 const emitter = require('events').EventEmitter;
 const path = require('path');
+const { createCommentStore } = require('./comments');
 
 // TODO integrate with config.js / env variables
 const transporter = nodemailer.createTransport({
@@ -27,6 +28,7 @@ const MONGO_CASES_COLLECTION = 'cases';
 var lastUpdateTime = new Date();   // counts from startup until the first batch
 
 const logger = tsanfordLogger.newLogger();
+const commentStore = createCommentStore({ MongoClient, config, logger, decodeEntities, lastFirstToFirstLast, toDate, casesCollection: MONGO_CASES_COLLECTION });
 logger.info("Starting up.");
 
 var casesUpdatedEmitter = new emitter();
@@ -79,6 +81,13 @@ function enqueue(filePath) {
 
 async function processFile(filePath) {
     logger.info(`Detected new file \'${filePath}\'. Begin parsing...`);
+    if (path.basename(filePath).startsWith('comments_')) {
+      // Comment batches (comments.js): written after the case batch of the same minute
+      await commentStore.store(JSON.parse(fs.readFileSync(filePath, 'utf8')));
+      lastUpdateTime = new Date();
+      await deleteFile(filePath);
+      return;
+    }
     // Each batch is an array of rows keyed by the OTSM report's column names, plus "Description"
     const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
     logger.silly("Loaded the following data from file: " + JSON.stringify(data));
