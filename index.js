@@ -135,6 +135,8 @@ async function processFile(filePath) {
         "companyRegion"           : col("Requested for company.Headquarters (Region)"),
         "ftsHostAccount"          : col("FTS Host Account"),
         "ftsHostPassword"         : col("FTS Host Password").trimStart(), // the report adds leading spaces
+        "ftsCustomerAccount"      : col("FTS Customer Account"),
+        "ftsCustomerPassword"     : col("FTS Customer Password").trimStart(),
         "closedDateTime"          : toDate(col("Closed DateTime")),
         "lastUpdatedByName"       : lastFirstToFirstLast(col("Last Updated By.Name")),
         "sltNextTargetTime"       : toDate(col("SLT.Next target time")),
@@ -144,6 +146,8 @@ async function processFile(filePath) {
         "customerTimeZone"        : col("Customer Time Zone"),
         "productDevId"            : col("Product Dev ID"),
         "productModel"            : col("Product Model.Display label"),
+        "productVersion"          : col("Product version.Display label"),   // "25.3 (5.1.2)"
+        "productPlatform"         : col("Product Platform").replace(/_c$/, ""),  // OTSM value "Linux_c" -> "Linux", as shown
         "closureCode"             : col("Closure Code.Display label"),
         "resolvedDateTime"        : toDate(col("Resolved DateTime")),
         "closeTime"               : toDate(col("Close time")),
