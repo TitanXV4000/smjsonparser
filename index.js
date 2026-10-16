@@ -83,6 +83,22 @@ function enqueue(filePath) {
 
 async function processFile(filePath) {
     logger.info(`Detected new file \'${filePath}\'. Begin parsing...`);
+    if (path.basename(filePath).startsWith('groups_')) {
+      // Assignment groups and members (smapiexporter groups.js): replaces smwb.groups
+      const groups = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const client = new MongoClient(config.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+      try {
+        await client.connect();
+        const col = client.db(config.MONGO_DB).collection('groups');
+        const docs = groups.map(g => ({ _id: g.id, name: g.name, region: g.region, timeZone: g.timeZone,
+          members: [...new Set(g.members.map(lastFirstToFirstLast))].sort(), logTime: new Date() }));
+        if (docs.length) { await col.deleteMany({ _id: { $nin: docs.map(d => d._id) } }); await col.bulkWrite(docs.map(d => ({ replaceOne: { filter: { _id: d._id }, replacement: d, upsert: true } }))); }
+        logger.info(`Groups: stored ${docs.length} assignment groups.`);
+      } finally { await client.close(); }
+      lastUpdateTime = new Date();
+      await deleteFile(filePath);
+      return;
+    }
     if (path.basename(filePath).startsWith('comments_')) {
       // Comment batches (comments.js): written after the case batch of the same minute
       await commentStore.store(JSON.parse(fs.readFileSync(filePath, 'utf8')));
