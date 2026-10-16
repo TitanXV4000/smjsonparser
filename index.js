@@ -93,7 +93,15 @@ async function processFile(filePath) {
         const docs = groups.map(g => ({ _id: g.id, name: g.name, region: g.region, timeZone: g.timeZone,
           members: [...new Set(g.members.map(lastFirstToFirstLast))].sort(), logTime: new Date() }));
         if (docs.length) { await col.deleteMany({ _id: { $nin: docs.map(d => d._id) } }); await col.bulkWrite(docs.map(d => ({ replaceOne: { filter: { _id: d._id }, replacement: d, upsert: true } }))); }
-        logger.info(`Groups: stored ${docs.length} assignment groups.`);
+        // People with their OTSM email (name as on cases), for the board's sign-up checks
+        const people = new Map();
+        for (const g of groups) for (const m of g.people || []) { if (m.email) people.set(lastFirstToFirstLast(m.name), String(m.email).trim().toLowerCase()); }
+        if (people.size) {
+          const pcol = client.db(config.MONGO_DB).collection('people');
+          await pcol.bulkWrite([...people].map(([name, email]) => ({ replaceOne: { filter: { _id: name }, replacement: { _id: name, email, logTime: new Date() }, upsert: true } })));
+          await pcol.deleteMany({ _id: { $nin: [...people.keys()] } });
+        }
+        logger.info(`Groups: stored ${docs.length} assignment groups, ${people.size} people with email.`);
       } finally { await client.close(); }
       lastUpdateTime = new Date();
       await deleteFile(filePath);
