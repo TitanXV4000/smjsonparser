@@ -12,6 +12,7 @@ const nodemailer = require('nodemailer');
 const emitter = require('events').EventEmitter;
 const path = require('path');
 const { createCommentStore } = require('./comments');
+const { createEventLog } = require('./events');
 
 // TODO integrate with config.js / env variables
 const transporter = nodemailer.createTransport({
@@ -28,6 +29,7 @@ const MONGO_CASES_COLLECTION = 'cases';
 var lastUpdateTime = new Date();   // counts from startup until the first batch
 
 const logger = tsanfordLogger.newLogger();
+const eventLog = createEventLog({ logger });
 const commentStore = createCommentStore({ MongoClient, config, logger, decodeEntities, lastFirstToFirstLast, toDate, casesCollection: MONGO_CASES_COLLECTION });
 logger.info("Starting up.");
 
@@ -188,6 +190,12 @@ async function uploadToMongo(collectionName, cases) {
     });
     const collection = database.collection(collectionName);
 
+    // Changes go to the event log first (it compares with the stored values). A failure
+    // here is logged but doesn't stop the cases from being written.
+    if (collectionName === MONGO_CASES_COLLECTION) {
+      try { const n = await eventLog.record(database, collectionName, cases); if (n) logger.info(`Events: ${n} changes recorded.`); }
+      catch (e) { logger.error(`Events: not recorded for this batch: ${e.message}`); }
+    }
     await upsertToCollection(collection, cases);
 
     casesUpdatedEmitter.emit(`${collectionName} updated`, cases);
