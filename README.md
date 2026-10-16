@@ -33,3 +33,8 @@ docker run -d --name smjsonparser --restart unless-stopped -e TZ=America/Denver 
   --add-host host.docker.internal:host-gateway -v smapidata:/smexports-api \
   --env-file smjsonparser.env tsanford/smjsonparser
 ```
+
+## Also
+- **Comments** (`comments.js`): `comments_*.json` batches go to `smwb.comments` (one document per comment), and each case gets comment summary fields (`latestComment...`, `latestCustomerComment...`, `latestAgentComment...`, `latestValueEdgeComment...`). FTS integration notes aren't stored.
+- **Event log** (`events.js`): before a batch is written, changes to owner, status, priority, product, product model, assignment group, title, case type and phase are recorded in `smwb.events`, for the qmon board's history and time in queue.
+- **Groups**: `groups_*.json` replaces `smwb.groups` (assignment groups and members).
